@@ -146,7 +146,13 @@ class Roster:
         matches = exact or [x for x in targets if any(t in n.lower() for n in x.match_names)]
         if not matches:
             known = ", ".join(x.label for x in targets) or "(none)"
-            raise LookupError(f"No recipient matching '{target}'. Known: {known}")
+            raise LookupError(
+                f"No recipient matching '{target}'. Known: {known}.\n"
+                "If this is someone you haven't transferred with before, they "
+                "aren't stored locally yet: open the Blip app, search for them, "
+                "and send them anything once. They'll then appear here and be "
+                "addressable by name."
+            )
         # collapse duplicates that point at the same peer
         uniq = {x.peer: x for x in matches}
         if len(uniq) > 1:
