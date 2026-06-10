@@ -73,6 +73,19 @@ pip install .
 python blip_send.py list
 ```
 
+### Other harnesses (Codex, Cursor, …)
+
+The Claude Code plugin bundles everything; other agents use the same engine via a
+small per-harness shim. Install the CLI once (`pipx install
+git+https://github.com/BenjaminHolderbein/blip-cli`), then drop in the shim for
+your tool:
+
+- **Codex** — an Agent Skill: [`integrations/codex`](integrations/codex)
+- **Cursor** — a `.cursor/rules` rule: [`integrations/cursor`](integrations/cursor)
+
+The shared CLI contract every shim builds on (and how to add your own harness)
+is documented in [`integrations/`](integrations/README.md).
+
 ## Usage
 
 ```bash
