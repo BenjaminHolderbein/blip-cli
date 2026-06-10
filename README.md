@@ -4,42 +4,48 @@ Send files through the [Blip](https://blip.net) file-transfer app from the
 command line — and, via the bundled Claude Code plugin, by just saying
 **"blip this to my mac."**
 
-Blip has no public API or CLI of its own. But its desktop app (a Kotlin/Compose
-app) ships a hidden launcher flag set, and this project uses it to drive the
-**genuine Blip app** — so the polished receive experience on the other device is
-fully preserved. Nothing is reimplemented and no UI is automated.
+Blip has no public API or CLI of its own. This project drives the **genuine Blip
+app** through the same local interfaces it already uses — so the polished receive
+experience on the other device is fully preserved. No UI is automated.
 
-## How it works
-
-The Blip desktop binary accepts:
-
-```
-blip --peer <user_id>:<device_id> --file <path> [--file <path> ...]
-```
-
-Blip is single-instance: a second invocation forwards these args to the
-already-running app, which creates the transfer. This tool:
-
-1. Reads Blip's local `state.dat` (a protobuf) to map a friendly name — one of
-   your own devices (e.g. `MacBook Pro`) **or a contact** (e.g. `Ben`) — to its
-   peer id `user_id:device_id`.
-2. Invokes the Blip binary with `--peer` / `--file`.
+Both steps below read your friendly device/contact names live from Blip's local
+`state.dat` (a protobuf): a name like `MacBook Pro` or a contact like `Ben` maps
+to its peer id `user_id:device_id`.
 
 > Peer ids are **not** hardcoded — they're read live from `state.dat`, so they
 > survive re-pairing devices.
+
+## How it works
+
+The transfer is triggered differently per OS, because Blip exposes a different
+local interface on each:
+
+* **Windows / Linux** — the desktop binary accepts a launcher flag set:
+  ```
+  blip --peer <user_id>:<device_id> --file <path> [--file <path> ...]
+  ```
+  Blip is single-instance, so a second invocation forwards these args to the
+  running app, which creates the transfer.
+* **macOS** — the app has no such CLI. Its background core instead serves a local
+  [DRPC](https://github.com/storj/drpc) socket (in Blip's App Group container)
+  with a `Dispatch` method. A send is three dispatched protobuf events —
+  `TransferCreateRequested` → `TransferAddContentRequested` →
+  `TransferInviteRequested` — which is exactly what the app's own UI does. This
+  is implemented in pure stdlib (no protobuf/grpc deps); see
+  [`src/blip_cli/macsend.py`](src/blip_cli/macsend.py).
 
 ## Platform support
 
 | OS      | Status        | Notes |
 |---------|---------------|-------|
-| Windows | ✅ Verified   | MSIX/Store build. |
-| macOS   | 🧪 Best-effort | Candidate paths shipped; needs verification. |
+| Windows | ✅ Verified   | MSIX/Store build; `--peer`/`--file` launcher. |
+| macOS   | ✅ Verified   | `net.blip.macos` build; native DRPC socket. |
 | Linux   | 🧪 Best-effort | Candidate paths shipped; **PRs welcome**. |
 
 Per-OS specifics live in one file: [`src/blip_cli/platforms.py`](src/blip_cli/platforms.py).
-If Blip is installed somewhere unexpected, point the tool at it with the
-`BLIP_STATE` (path to `state.dat`) and `BLIP_BIN` (path to the Blip binary)
-environment variables — no code change needed.
+If Blip is installed somewhere unexpected, override discovery with the
+`BLIP_STATE` (path to `state.dat`), `BLIP_BIN` (Blip binary, win/linux), or
+`BLIP_SOCK` (DRPC socket, macOS) environment variables — no code change needed.
 
 ## Install
 
@@ -74,8 +80,8 @@ blip-send list                                  # show your devices + contacts +
 blip-send send --to "MacBook Pro" report.pdf    # send to one of your devices
 blip-send send --to "Ben" report.pdf            # send to a contact by name
 blip-send send --to mac a.png b.png             # partial name, multiple files
-blip-send send --to mac report.pdf --dry-run    # print the Blip command only
-blip-send doctor                                # diagnostics (paths, launcher)
+blip-send send --to mac report.pdf --dry-run    # print what would be sent only
+blip-send doctor                                # diagnostics (paths, transport)
 ```
 
 (`python blip_send.py <args>` works identically without installing.)
@@ -87,9 +93,10 @@ blip-send doctor                                # diagnostics (paths, launcher)
   `state.dat`). Brand-new people you've never exchanged a file with are resolved
   server-side by Blip and aren't available from local data — do one transfer with
   them through the app first, then they're addressable by name here.
-- Rides an **undocumented** launcher flag set; a future Blip update could rename
-  a flag. `blip-send doctor` plus the notes in `platforms.py` are the place to
-  start if behavior changes.
+- Rides **undocumented** local interfaces (the launcher flags on Windows/Linux,
+  the DRPC `Dispatch` events on macOS); a future Blip update could change either.
+  `blip-send doctor` plus the notes in `platforms.py` / `macsend.py` are the
+  place to start if behavior changes.
 
 ## Contributing (esp. macOS / Linux)
 
@@ -104,9 +111,11 @@ blip-send doctor                                # diagnostics (paths, launcher)
 ## Legal / interop note
 
 This is interoperability tooling for files you send from your own account using
-the app as intended. It does not reimplement Blip's protocol, bypass any
-protection, or reverse the wire format — it only reads your local app state and
-invokes the official binary. Not affiliated with Blip Studio Inc.
+the app as intended. It reads your local app state and drives the official app
+through its own local interfaces (the launcher flags, or — on macOS — the local
+DRPC socket the app already runs). It does not touch Blip's network protocol,
+bypass any protection, or talk to Blip's servers; the genuine app performs every
+transfer. Not affiliated with Blip Studio Inc.
 
 ## License
 

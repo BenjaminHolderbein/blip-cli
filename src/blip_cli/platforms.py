@@ -1,19 +1,24 @@
-"""Platform-specific knowledge: where Blip stores ``state.dat`` and how to launch
-the Blip binary so it creates a transfer.
+"""Platform-specific knowledge: where Blip stores its data and how to make it
+create a transfer.
 
-The send mechanism is identical across desktop platforms because Blip uses the
-same Compose/Conveyor launcher everywhere: invoking the binary with
-``--peer <user_id>:<device_id> --file <path>`` forwards the request to the
-already-running single instance, which creates the transfer.
+The two send mechanisms differ by OS:
 
-Only two things differ per OS and are isolated here:
+* Windows/Linux use Blip's Compose/Conveyor launcher: invoking the binary with
+  ``--peer <user_id>:<device_id> --file <path>`` forwards the request to the
+  already-running single instance. See :func:`build_send_argv`.
+* macOS has no such CLI. Its background core instead serves a DRPC socket in the
+  App Group container; we talk to it directly (see :mod:`blip_cli.macsend`).
+  :func:`find_socket` locates that socket.
+
+Per-OS knowledge is isolated here:
 
 * :func:`state_dat_candidates` -- candidate paths to ``state.dat``;
-* :func:`launcher_prefix` -- the argv prefix used to invoke Blip.
+* :func:`launcher_prefix` -- the argv prefix used to invoke Blip (win/linux);
+* :func:`socket_candidates` / :func:`find_socket` -- the DRPC socket (macOS).
 
-Windows is verified. macOS and Linux ship best-effort candidates; if Blip lives
-somewhere else on your machine, add the path here (PRs welcome) or override with
-the ``BLIP_STATE`` / ``BLIP_BIN`` environment variables.
+Windows and macOS are verified. Linux ships best-effort candidates. If Blip
+lives somewhere else, add the path here (PRs welcome) or override with the
+``BLIP_STATE`` / ``BLIP_BIN`` / ``BLIP_SOCK`` environment variables.
 """
 
 from __future__ import annotations
@@ -49,10 +54,20 @@ def state_dat_candidates() -> list[Path]:
 
     if sys.platform == "darwin":
         home = Path.home()
+        gc = home / "Library" / "Group Containers"
         cands = [
+            # The shipping Mac app (bundle id net.blip.macos) is sandboxed and
+            # keeps state.dat in its App Group container, e.g.
+            #   ~/Library/Group Containers/AY8UB8KTUX.blip/state.dat
+            # The leading element is Blip's Apple Developer Team ID; glob it so
+            # we don't hard-code a team that could change between signings.
+            Path(p) for p in sorted(glob.glob(str(gc / "*.blip" / "state.dat")))
+        ]
+        cands += [
+            # Non-sandboxed / older fallback.
             home / "Library" / "Application Support" / _APP_DIR / "state.dat",
         ]
-        # Sandboxed (Mac App Store) builds live under a container.
+        # Per-app sandbox container (Mac App Store style), just in case.
         cands += [
             Path(p)
             for p in glob.glob(
@@ -125,3 +140,39 @@ def build_send_argv(peer: str, files: list[str]) -> list[str]:
     for f in files:
         argv += ["--file", f]
     return argv
+
+
+# --- macOS native send transport -------------------------------------------
+# The Mac app has no --peer/--file CLI; instead its background core serves a
+# DRPC socket in the App Group container (see macsend.py). These helpers locate
+# that socket and make sure the core is running.
+
+def socket_candidates() -> list[Path]:
+    env = os.environ.get("BLIP_SOCK")
+    if env:
+        return [_expand(env)]
+    if sys.platform == "darwin":
+        gc = Path.home() / "Library" / "Group Containers"
+        return [Path(p) for p in sorted(glob.glob(str(gc / "*.blip" / "Library" / "Caches" / "sock")))]
+    return []
+
+
+def find_socket(launch: bool = True, timeout: float = 20.0) -> Path:
+    """Return the core's DRPC socket, launching Blip and waiting if needed."""
+    for c in socket_candidates():
+        if c.exists():
+            return c
+    if launch and sys.platform == "darwin":
+        import subprocess
+        import time
+        subprocess.run(["open", "-a", "Blip"], check=False)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for c in socket_candidates():
+                if c.exists():
+                    return c
+            time.sleep(0.5)
+    raise FileNotFoundError(
+        "Could not find Blip's RPC socket. Is Blip installed and signed in? "
+        "Searched: " + (", ".join(str(c) for c in socket_candidates()) or "(no candidates)")
+    )

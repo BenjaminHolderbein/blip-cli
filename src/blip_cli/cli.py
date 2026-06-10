@@ -77,6 +77,25 @@ def cmd_send(args: argparse.Namespace) -> int:
             raise SystemExit(f"File not found: {f}")
         files.append(str(p.resolve()))
 
+    # macOS has no launcher CLI; talk to the core's DRPC socket directly.
+    if sys.platform == "darwin":
+        from . import macsend
+        user_id, _, device_id = target.peer.partition(":")
+        if args.dry_run:
+            print(f"drpc {platforms.find_socket(launch=False)} -> "
+                  f"Dispatch TransferCreate/AddContent/Invite to {target.peer}")
+            return 0
+        print(f"Sending to {target.label} ({target.peer}):")
+        for f in files:
+            print(f"  {f}")
+        sock = platforms.find_socket()
+        try:
+            macsend.send(str(sock), user_id, device_id, files)
+        except Exception as e:  # noqa: BLE001 - surface a clean message
+            raise SystemExit(f"Send failed: {e}")
+        print("Sent via Blip. Check the recipient device.")
+        return 0
+
     argv = platforms.build_send_argv(target.peer, files)
 
     if args.dry_run:
@@ -110,7 +129,14 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print(f"contacts: {', '.join(p.label for p in roster.contacts) or '(none)'}")
     except Exception as e:  # noqa: BLE001 - diagnostics
         print(f"state.dat: ERROR: {e}")
-    print(f"launcher: {' '.join(platforms.launcher_prefix())}")
+    if sys.platform == "darwin":
+        cands = platforms.socket_candidates()
+        print("socket candidates:")
+        for c in cands:
+            print(f"  [{'x' if c.exists() else ' '}] {c}")
+        print("send: native DRPC socket")
+    else:
+        print(f"launcher: {' '.join(platforms.launcher_prefix())}")
     return 0
 
 
