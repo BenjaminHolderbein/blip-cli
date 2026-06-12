@@ -160,22 +160,61 @@ def socket_candidates() -> list[Path]:
     return []
 
 
-def find_socket(launch: bool = True, timeout: float = 20.0) -> Path:
-    """Return the core's DRPC socket, launching Blip and waiting if needed."""
+def _live_socket() -> Path | None:
     for c in socket_candidates():
         if c.exists():
             return c
+    return None
+
+
+def _blip_running() -> bool:
+    import subprocess
+    return subprocess.run(["pgrep", "-x", "Blip"],
+                          capture_output=True).returncode == 0
+
+
+def _wait_for_socket(timeout: float) -> Path | None:
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        s = _live_socket()
+        if s:
+            return s
+        time.sleep(0.5)
+    return None
+
+
+def find_socket(launch: bool = True, timeout: float = 20.0) -> Path:
+    """Return the core's DRPC socket, starting/recovering Blip if needed.
+
+    Blip's core only hosts the socket "when needed"; once the app goes idle (or
+    wedges after a sleep/wake), the socket disappears and merely *activating* the
+    app won't bring it back. So: if Blip isn't running, launch it; if it's running
+    but not serving, restart it (the only reliable way to re-host the core)."""
+    s = _live_socket()
+    if s:
+        return s
     if launch and sys.platform == "darwin":
         import subprocess
         import time
-        subprocess.run(["open", "-a", "Blip"], check=False)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            for c in socket_candidates():
-                if c.exists():
-                    return c
-            time.sleep(0.5)
+        if not _blip_running():
+            subprocess.run(["open", "-a", "Blip"], check=False)
+        else:
+            # Running but not serving -> restart to re-host the core.
+            print("Blip is running but not serving; restarting it...", file=sys.stderr)
+            subprocess.run(["osascript", "-e", 'tell application "Blip" to quit'],
+                           check=False, capture_output=True)
+            quit_by = time.monotonic() + 8
+            while _blip_running() and time.monotonic() < quit_by:
+                time.sleep(0.3)
+            subprocess.run(["pkill", "-x", "Blip"], check=False, capture_output=True)
+            time.sleep(1)
+            subprocess.run(["open", "-a", "Blip"], check=False)
+        s = _wait_for_socket(timeout)
+        if s:
+            return s
     raise FileNotFoundError(
         "Could not find Blip's RPC socket. Is Blip installed and signed in? "
-        "Searched: " + (", ".join(str(c) for c in socket_candidates()) or "(no candidates)")
+        "Try quitting and reopening Blip. Searched: "
+        + (", ".join(str(c) for c in socket_candidates()) or "(no candidates)")
     )

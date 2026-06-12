@@ -1,7 +1,7 @@
 {
   "name": "zoop",
   "description": "Send files through the Blip file-transfer app by natural language, e.g. 'blip this to my mac'. Resolves a device name to a Blip peer and dispatches the transfer via the genuine Blip app.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": { "name": "Benjamin Holderbein" },
   "homepage": "https://github.com/BenjaminHolderbein/zoop",
   "repository": "https://github.com/BenjaminHolderbein/zoop",
